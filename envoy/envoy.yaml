@@ -1,0 +1,86 @@
+static_resources:
+  listeners:
+    - name: listener_0
+      address:
+        socket_address:
+          address: 0.0.0.0 # bind to all network interface inside the container
+          port_value: 8090 # port (Docker) exposes to the host
+      filter_chain:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                start_prefix: ingress_http # prepended label for metrics  e.g. http.ingress_http.downstream_rq_total
+                use_remote_address: true
+                route_config: # maps incoming request to upstream clusters
+                  name: local_route
+                  virtual_hosts:
+                    - name: local_service
+                      domains: ["*"] # in prod domain name would be `api.example.com` to route different domains to different clusters from the same listener
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: spring_boot_service
+                      rate_limits:
+                        - actions:
+                            - remote_address: {}
+                        - actions:
+                            - request_headers:
+                                header_name: ":path"
+                                descriptor_key: path
+                http_filter:
+                  - name: envoy.filters.http.ratelimit
+                    type_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                      domain: my_domain
+                      request_type: external
+                      stage: 0
+                      rate_limited_resource_exhausted: true
+                      failure_mode_deny: false # False -> allow the request through. True -> clock request. (if rate limit service is unreachable)
+                      rate_limit_service:
+                        grpc_service:
+                          envoy_grpc:
+                            cluster_name: rate_limit_service
+                        transport_api_version: V3
+                  -  name: envoy.filters.http.router
+                     type_config:
+                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: spring_boot_service # arbitrary name. Must match what is referenced in the route.cluster
+      connect_timeout: 1s
+      type: STRICT_DNS
+      load_assignment:
+        cluster_name: spring_boot_service
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: spring_boot
+                      port_value: 8080
+    - name: rate_limit_service
+      connect_timeout: 0.25s
+      type: STRICT_DNS
+      http2_protocol_options: {}
+      load_assignment:
+        cluster_name: rate_limit_service
+        endpoints:
+          - lb_endpoints:
+              - endpoints:
+                  address:
+                    socket_address:
+                      address: ratelimit
+                      port_value: 8081
+
+  admin:
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 9901
+        # Standard Envoy admin port. Useful endpoints:
+        #   /stats         — all metrics as plain text
+        #   /clusters      — health of each upstream cluster
+        #   /config_dump   — the full resolved running config as JSON
+        #   /listeners     — active listeners
+        # Never expose this port publicly in production.

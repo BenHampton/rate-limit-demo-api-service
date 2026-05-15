@@ -1,0 +1,17 @@
+# the domain must math what you set in envoy.yaml
+domain: my_domain
+descriptors:
+
+  # Rule 1 - 10 requests per minute from any single IP
+  - key: remote_address
+    rate_limit:
+      unit: MINUTE
+      request_per_unit: 10
+
+  # Rule 2 - 5 requests per minute to /hello-world path
+  - key: path
+    value: /hello-world
+    rate_limit:
+      unit: MINUTE
+      request_per_unit: 5
+
