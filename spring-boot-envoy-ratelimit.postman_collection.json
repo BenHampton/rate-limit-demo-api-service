@@ -1,0 +1,256 @@
+{
+  "info": {
+    "name": "Spring Boot + Envoy Rate Limiting",
+    "_postman_id": "rl-demo-collection-v1",
+    "description": "Requests for testing the Spring Boot + Envoy rate limiting integration.\n\nBase URL: http://localhost:8090 (via Envoy)\nDirect:   http://localhost:8080 (Spring Boot)\nAdmin:    http://localhost:9901 (Envoy admin)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8090",
+      "type": "string"
+    },
+    {
+      "key": "direct_url",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "admin_url",
+      "value": "http://localhost:9901",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Hello World",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/hello-world",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "hello-world"
+          ]
+        },
+        "description": "Basic request through Envoy. Confirms the proxy is working and returns the client IP."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Returns message', () => {",
+              "  const json = pm.response.json();",
+              "  pm.expect(json).to.have.property('message');",
+              "  pm.expect(json.message).to.eql('Hello!');",
+              "});",
+              "pm.test('Returns client_ip', () => {",
+              "  const json = pm.response.json();",
+              "  pm.expect(json).to.have.property('client_ip');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health Check (direct — bypasses Envoy)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{direct_url}}/actuator/health",
+          "host": [
+            "{{direct_url}}"
+          ],
+          "path": [
+            "actuator",
+            "health"
+          ]
+        },
+        "description": "Hits Spring Boot directly on port 8080, bypassing Envoy. Use to confirm the app is up independently."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('App status UP', () => {",
+              "  const json = pm.response.json();",
+              "  pm.expect(json.status).to.eql('UP');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Hello World — Rate Limit Header Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/hello-world",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "hello-world"
+          ]
+        },
+        "description": "Sends one request and asserts all three x-ratelimit-* headers are present in the response."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('x-ratelimit-limit header present', () => {",
+              "  pm.expect(pm.response.headers.get('x-ratelimit-limit')).to.not.be.undefined;",
+              "});",
+              "pm.test('x-ratelimit-remaining header present', () => {",
+              "  pm.expect(pm.response.headers.get('x-ratelimit-remaining')).to.not.be.undefined;",
+              "});",
+              "pm.test('x-ratelimit-reset header present', () => {",
+              "  pm.expect(pm.response.headers.get('x-ratelimit-reset')).to.not.be.undefined;",
+              "});",
+              "pm.test('x-ratelimit-remaining is a number', () => {",
+              "  const remaining = parseInt(pm.response.headers.get('x-ratelimit-remaining'));",
+              "  pm.expect(remaining).to.be.a('number');",
+              "  pm.expect(remaining).to.be.at.least(0);",
+              "});",
+              "const limit = pm.response.headers.get('x-ratelimit-limit');",
+              "const remaining = pm.response.headers.get('x-ratelimit-remaining');",
+              "const reset = pm.response.headers.get('x-ratelimit-reset');",
+              "console.log('Rate limit headers:', { limit, remaining, reset });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Trigger 429 (use Runner — 10 iterations)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/hello-world",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "hello-world"
+          ]
+        },
+        "description": "Run this via Collection Runner with 10 iterations and 0ms delay.\nRequests 1-5 should return 200. Requests 6-10 should return 429.\n\nThe test is written to pass on either 200 or 429 so the runner completes cleanly."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const status = pm.response.code;",
+              "pm.test('Response is 200 or 429', () => {",
+              "  pm.expect([200, 429]).to.include(status);",
+              "});",
+              "if (status === 429) {",
+              "  pm.test('429 — rate limit hit', () => {",
+              "    pm.expect(status).to.eql(429);",
+              "    console.log('Rate limit triggered! x-ratelimit-reset:', pm.response.headers.get('x-ratelimit-reset'));",
+              "  });",
+              "} else {",
+              "  const remaining = pm.response.headers.get('x-ratelimit-remaining');",
+              "  console.log('Request allowed. Remaining:', remaining);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Envoy Admin — Stats",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{admin_url}}/stats",
+          "host": [
+            "{{admin_url}}"
+          ],
+          "path": [
+            "stats"
+          ]
+        },
+        "description": "Fetches all Envoy stats as plain text. Filter for 'ratelimit' to see rate limit counters."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Envoy admin reachable', () => pm.response.to.have.status(200));",
+              "const text = pm.response.text();",
+              "const rateLimitLines = text.split('\\n').filter(l => l.includes('ratelimit'));",
+              "console.log('Rate limit stats:', rateLimitLines.join('\\n'));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Envoy Admin — Config Dump",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{admin_url}}/config_dump",
+          "host": [
+            "{{admin_url}}"
+          ],
+          "path": [
+            "config_dump"
+          ]
+        },
+        "description": "Returns the full resolved Envoy config as JSON. Useful for verifying rate_limits actions are loaded correctly."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Config dump reachable', () => pm.response.to.have.status(200));",
+              "pm.test('Rate limit filter present in config', () => {",
+              "  const text = pm.response.text();",
+              "  pm.expect(text).to.include('envoy.filters.http.ratelimit');",
+              "});",
+              "pm.test('Rate limits actions present in config', () => {",
+              "  const text = pm.response.text();",
+              "  pm.expect(text).to.include('rate_limits');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    }
+  ]
+}

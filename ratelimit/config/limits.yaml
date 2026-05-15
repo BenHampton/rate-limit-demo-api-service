@@ -6,12 +6,12 @@ descriptors:
   - key: remote_address
     rate_limit:
       unit: MINUTE
-      request_per_unit: 10
+      requests_per_unit: 10
 
   # Rule 2 - 5 requests per minute to /hello-world path
   - key: path
-    value: /hello-world
+    value: /api/v1/hello-world
     rate_limit:
       unit: MINUTE
-      request_per_unit: 5
+      requests_per_unit: 5
 

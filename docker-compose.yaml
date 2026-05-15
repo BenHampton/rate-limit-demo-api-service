@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  spring_boot:
+    build: .
+    ports:
+      - "8080:8080"
+    networks:
+      - rl_net
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - rl_net
+
+# Lyft rate limit service:
+# exposes a gRPC endpoint that  Envoy calls on every request (see envoy.yaml).
+# it reads your limits.yaml rules, checks the counters in Redis and returns ALLOW or OVER_LIMIT to Envoy.
+  ratelimit:
+    image: envoyproxy/ratelimit:master # The official image from the envoyproxy org on Docker
+    command: /bin/ratelimit # entry point binary inside the image. This starts the gRPC server and loads the config from the volume
+    environment:
+      LOG_LEVEL: debug
+      REDIS_SOCKET_TYPE: tcp
+      REDIS_URL: redis:6379
+      USE_STATSD: "false" # whether to emit metrics to StatsD agent. Disabled, no StatsD container in this stack. Set to "true" and add STATSD_HOST/STATSD_PORT if  you want to ship metrics to Datadog, Grafana, etc.
+      RUNTIME_ROOT: /data # base directory the service looks in for config. Combined with RUNTIME_SUBDIRECTORY, it constructs  the full path: /data/ratelimit/config/limits.yaml
+      RUNTIME_SUBDIRECTORY: ratelimit # Appended to RUNTIME_ROOT. The service then looks for  YAML files inside a "config/" folder within this sub dir. the "config/" level is mandatory, files placed directly in "/data/ratelimt/" are ignored.
+      RUNTIME_WATCH_ROOT: "false" # Whether to watch the config dir for the file changes and hot-reload rules without restarting. "false", bc the volume is static. Set "true" if you want to edit limits.yaml and have changes apply live.
+      RUNTIME_IGNOREDOTFILES: "true" # Skip any files starting with "." in the config dir (e.g. .gitkeep, editor swap files). Prevents the service from trying to parse non-YAML files and crashing on startup.
+      GRPC_MAX_CONCURRENT_STREAMS: "1000000" # Maximum number of in-flight gRPC streams the server will accept simultaneously. One stream per request means this is effectively your max in-flight checks. The default is much lower, raising it prevents backpressure under high traffic
+    volumes:
+      - ./ratelimit:/data/ratelimit # mounts ratelimit/cnofig.limit.yaml into the container at "/data/ratelimit". How the service reads your rules without needing to bake them into the custom Docker image. Changes to limits.yaml require a container restart unless RUNTIME_WATCH_ROOT is set to "true".
+    depends_on:
+      - redis
+    networks:
+      - rl_net
+
+  # Envoy proxy (public entry point):
+  # Envoy is the only container that receives traffic from the outside world (your browser, Postman, curl). It intercepts every request. ca;;s the rate limit service over
+  # gRCP to check the counter, then either forwards the request to the Spring Boot or returns 429, all before your app code runs. Spring Boot never sees block requests and has no rate-limiting logic of its own
+  envoy:
+    image: envoyproxy/envoy:v1.29-latest # Pinned to v1.29. Envoy follows a rapid release cycle (~3 releases/year). The tag format is vMAJOR.MINOR-latest. Avoid "latest" — it can silently break your config when a new major version ships with breaking API changes
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml # Mounts your local envoy.yaml into the container at the path Envoy reads by default. Like the rate limit config, this avoids building a custom image just to embed config. A restart is required to pick up changes to this file.
+    ports:
+      - "8090:8090" # public -> sends all Postman traffic here
+      - "9901:9901" # Envoy admin dashboard
+    command: envoy -c /etc/envoy/envoy.yaml --log-level info # -c points Envoy at your config file. --log-level controls verbosity: trace, debug, info, warn, error, critical. "info" logs each request and its outcome. Use "debug" to see the rate limit gRPC calls in detail.
+    depends_on:
+      - spring_boot
+      - ratelimit
+    networks:
+      - rl_net
+
+networks:
+  rl_net:
+    driver: bridge
