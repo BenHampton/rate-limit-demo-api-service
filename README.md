@@ -115,6 +115,33 @@ Import `spring-boot-envoy-ratelimit.postman_collection.json`. The collection inc
 - **Health Check (direct)** — hits Spring Boot on 8080, bypasses Envoy
 - **Envoy Admin — Stats / Config Dump**
 
+## Testing with JMeter
+
+Import `jmeter/Rate Limit Test Plan.jmx` into Apache JMeter 5.6+.
+
+**Test plan config:**
+
+| Setting | Value |
+|---|---|
+| Target | `http://localhost:8090/api/v1/hello-world` |
+| Threads | 5 |
+| Ramp-up | 1 second |
+| Loops per thread | 10 |
+| Total requests | 50 |
+
+The assertion accepts both `200` and `429` as passing — this is intentional. With a 5 req/min path limit and 5 concurrent threads firing immediately, most requests will hit `429`. The test validates that Envoy is enforcing the limit (429s are expected), not that all requests succeed.
+
+**Listeners included:**
+- View Results Tree — inspect individual request/response details
+- Summary Report — throughput and error rate summary
+- Response Time Graph — latency over time
+
+**To run:**
+1. Ensure the full stack is up (`docker compose up --build`)
+2. Open JMeter and load the `.jmx` file
+3. Click the green Run button
+4. Check the Summary Report — you should see a mix of 200s (first ~5) and 429s (remainder)
+
 ## Tech Stack
 
 | | |
